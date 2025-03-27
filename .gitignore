@@ -1,0 +1,17 @@
+.cache
+.dll
+.zip
+.log
+.DS_Store?
+Thumbs.db
+.user
+
+
+testResult/
+testData/
+
+.vscode/
+bin/
+obj/
+packages/
+doc/

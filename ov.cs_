@@ -1,0 +1,115 @@
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+namespace OperationVisualizer
+{
+    class TransparentOverlay : Form
+    {
+        private LowLevelMouseProc _mouseProc;
+        private IntPtr _hookID = IntPtr.Zero;
+        private Timer timer;
+
+        public TransparentOverlay()
+        {
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.ShowInTaskbar = true;
+            this.TopMost = true;
+            this.WindowState = FormWindowState.Maximized;
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+            this.Opacity = 0.5;
+            this.DoubleBuffered = true;
+
+            timer = new Timer();
+            timer.Interval = 50;
+            timer.Tick += (s, e) => UpdateEffects();
+            timer.Start();
+
+            //SetClickThrough(this.Handle);
+
+            _mouseProc = HookCallback;
+            _hookID = SetHook(_mouseProc);
+        }
+
+
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            UnhookWindowsHookEx(_hookID);
+            base.OnFormClosed(e);
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == Keys.Escape)
+            {
+                this.Close();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg,keyData);
+        }
+
+        private static IntPtr SetHook(LowLevelMouseProc proc)
+        {
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.Module)
+            {
+                return SetWindowsHookEx(14, proc, GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
+
+        private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+        private IntPtr HookCallBack(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if ((wParam == (IntPtr)0x0201))
+            {
+                MSLLHOOKSTRUCT hook = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+                Console.WriteLine("LCLICK");
+                effects.Add(new MouseEffect())
+            }
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        }
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hWnd,int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll")]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT {public int x; public int y; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MSLLHOOKSTRUCT
+        {
+            public POINT pt;
+            public uint mouseData;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [STAThread]
+        public static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.Run(new TransparentOverlay());
+        }
+    }
+}
