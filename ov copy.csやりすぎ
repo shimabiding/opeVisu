@@ -113,14 +113,19 @@ public class TransparentOverlay : Form
         return bmp;
     }
 
+    int typeCircle = 0;
+    int typeMouse = 1;
+    int typeModiKey = 2;
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
         lock (_lockObj)
         {
             foreach (var effect in _activeEffects)
-            {
-                if (effect.Type == ClickEffect.typeCircle)
+
+            {            Console.WriteLine(effect.Type);
+                if (effect.Type == 0)
                 {
                     // 輪の描画（半透明の青い円）
                     using (var pen = new Pen(Color.FromArgb(150, 0, 120, 255), 3))
@@ -132,50 +137,64 @@ public class TransparentOverlay : Form
                             effect.Radius * 2);
                     }
                 }
-                else if (effect.Type == ClickEffect.typeMouse)
+                else if (effect.Type == typeMouse)
                 {
                     // アイコンの描画
-                    e.Graphics.DrawImage(effect.Icon, effect.Location);
+                    //e.Graphics.DrawImage(effect.Icon, effect.Location);
                 }
-                else
-                {
-                    e.Graphics.DrawString(effect.Text, new Font("Yu Gothic UI", 20), Brushes.Cyan, effect.Location.X + 20, effect.Location.Y - 50);
-                }
+                else if (effect.Type == typeModiKey)
+                    {
+                        using (var font = new Font("Yu Gothic UI", 30, FontStyle.Bold))
+                    using (var brush = new SolidBrush(Color.Cyan))
+                    {
+                        var location = new Point(effect.Location.X + 20, effect.Location.Y);
+                        e.Graphics.DrawString(effect.Text, font, brush, location);
+                    }}
             }
         }
     }
 
     private class ClickEffect
     {
-        public const int typeCircle = 0;
-        public const int typeMouse = 1;
-        public const int typeModify = 2;
-
         public Bitmap Icon { get; set; }
         public Point Location { get; set;}
         public int Radius { get; set; }
-        public string Text { get; set; }
         public int Type { get; set;}
+        public string Text;
 
         public ClickEffect(Bitmap icon, Point location)
         {
             Icon = icon;
             Location = location;
-            Type = typeMouse;
+            Type = 0;
         }
         
         public ClickEffect(Point location)
         {
             Location = location;
             Radius = 16;
-            Type = typeCircle;
+            Type = 1;
         }
 
         public ClickEffect(string text, Point location)
         {
             Text = text;
             Location = location;
-            Type = typeModify;
+            Type = 2;
+        }
+    }
+
+    private class KeyStateDisplay
+    {
+        public string Text { get; set; }
+        public Point Location {get; set;}
+        public Color Color { get; set;}
+
+        public KeyStateDisplay(string text, Point location, Color color)
+        {
+            Text = text;
+            Location = location;
+            Color = color;
         }
     }
 
@@ -233,20 +252,20 @@ public class TransparentOverlay : Form
                 }, TaskScheduler.FromCurrentSynchronizationContext());
             }
 
-            var key = "";
-            if ((Control.ModifierKeys & Keys.Control) > 0) key += "CONTROL";
-            if ((Control.ModifierKeys & Keys.Shift) > 0) key += "\nSHIFT";
-            if (key != "")
+            var modKey = "";
+            if ((Control.ModifierKeys & Keys.Control) > 0) modKey += "CONTROL";
+            if ((Control.ModifierKeys & Keys.Shift) > 0) modKey += "\nSHIFT";
+            if (modKey != "") 
             {
-                var keyEffect = new ClickEffect(key, clickPos);
+                var keyEffect = new ClickEffect(modKey, clickPos);
                 lock (_lockObj)
                 {
                     _activeEffects.Add(keyEffect);
                 }
 
-                Task.Delay(800).ContinueWith(t =>
+                Task.Delay(800).ContinueWith(t => 
                 {
-                    lock(_lockObj)
+                    lock (_lockObj)
                     {
                         _activeEffects.Remove(keyEffect);
                     }
@@ -256,6 +275,65 @@ public class TransparentOverlay : Form
         }
         return CallNextHookEx(_hookID, nCode, wParam, lParam);
     }
+/*
+    protected override void WndProc(ref Message msg)
+    {
+        const int KEYDOWN = 0x0100;
+        const int KEYUP = 0x0101;
+        const int WM_SYSKEYDOWN = 0x0104;
+        const int WM_SYSKEYUP = 0x0105;
+
+        if (msg.Msg == KEYDOWN || msg.Msg == KEYUP || msg.Msg == WM_SYSKEYDOWN || msg.Msg == WM_SYSKEYUP)
+        {
+            CheckModifierKeys();
+        }
+
+        base.WndProc(ref msg);
+    }
+
+    private void CheckModifierKeys()
+    {
+        var currentKeys = Control.ModifierKeys;
+        if(currentKeys == _lastModifierKeys) return;
+
+        KeyStateDisplay ck = null, sk = null;
+
+        lock (_lockObj)
+        {
+            if ((currentKeys & Keys.Control) == Keys.Control)
+            {
+                ck = new KeyStateDisplay(
+                    "CONTROL",
+                    new Point(Cursor.Position.X + 20, Cursor.Position.Y),
+                    Color.Cyan
+                );
+                _activeKeyDisplays.Add(ck);
+            }
+
+            if ((currentKeys & Keys.Shift) == Keys.Shift)
+            {
+                sk = new KeyStateDisplay(
+                    "SHIFT",
+                    new Point(Cursor.Position.X + 20, Cursor.Position.Y + 25),
+                    Color.Cyan
+                );
+                _activeKeyDisplays.Add(sk);
+            }
+        }
+
+        Task.Delay(1000).ContinueWith(t =>
+        {
+            lock(_lockObj)
+            {
+                if (ck != null) _activeKeyDisplays.Remove(ck);
+                if (sk != null) _activeKeyDisplays.Remove(sk);
+            }
+            this.Invalidate();
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+
+        _lastModifierKeys = currentKeys;
+        this.Invalidate();
+    }*/
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
@@ -313,6 +391,8 @@ public class TransparentOverlay : Form
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_LAYERED = 0x80000;
     private const int WS_EX_TRANSPARENT = 0x20;
+    private const int MK_CONTROL = 0x0008;
+    private const int MK_SHIFT = 0x0004;
 
     [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern int SetWindowLong(IntPtr hwnd, int nIndex, int dwNewLong);
