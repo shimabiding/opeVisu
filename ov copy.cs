@@ -1,7 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Threading.Tasks;
@@ -10,13 +10,11 @@ public class TransparentOverlay : Form
 {
     private LowLevelMouseProc _mouseProc;
     private IntPtr _hookID = IntPtr.Zero;
-    private Point _lastClickPosition;
-    private float _currentOpacity = 0f;
-    private bool _isAnimating = false;
-    private Timer _animationTimer;
-
-    private SolidBrush _mouseBrush;
-    private Pen _mousePen;
+    private readonly List<ClickIcon> _activeIcons = new List<ClickIcon>();
+    private readonly object _lockObj = new object();
+    private readonly Bitmap _leftClickIcon;
+    private readonly Bitmap _rightClickIcon;
+    private readonly Bitmap _wheelClickIcon;
 
     public TransparentOverlay()
     {
@@ -26,17 +24,14 @@ public class TransparentOverlay : Form
         this.WindowState = FormWindowState.Maximized;
         this.BackColor = Color.Magenta;
         this.TransparencyKey = Color.Magenta;
-        this.Opacity = 0.5;
+        this.Opacity = 0.8;
         this.ShowInTaskbar = true;
         this.DoubleBuffered = true;
 
-        // アニメーション用タイマー
-        _animationTimer = new Timer();
-        _animationTimer.Interval = 16; // 約60FPS
-        _animationTimer.Tick += AnimationTick;
-
-        _mouseBrush = new SolidBrush(Color.FromArgb(0, 255, 0, 0));
-        _mousePen = new Pen(Color.Red, 2);
+        // アイコン画像の読み込み（簡易的な描画で代用）
+        _leftClickIcon = CreateClickIcon(highlightLeft: true);
+        _rightClickIcon = CreateClickIcon(highlightRight: true);
+        _wheelClickIcon = CreateClickIcon(highlightWheel: true);
 
         // マウス透過設定
         SetClickThrough(this.Handle);
@@ -45,101 +40,211 @@ public class TransparentOverlay : Form
         _mouseProc = HookCallback;
         _hookID = SetHook(_mouseProc);
 
-        // ESCキーで終了
-        this.KeyPreview = true;
-        this.KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) this.Close(); };
+        // アイコン更新用タイマー
+        var timer = new Timer { Interval = 50 };
+        timer.Tick += (s, e) => this.Invalidate();
+        timer.Start();
+    }
+
+
+    private Bitmap CreateClickIcon(bool highlightLeft = false, bool highlightRight = false, bool highlightWheel = false, bool scrollUp = false, bool scrollDown = false)
+    {
+        var bmp = new Bitmap(64, 108);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            //g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            // 角丸長方形のパスを作成
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            int radius = 25; // 角の半径
+            Rectangle baseRect = new Rectangle(8, 24, 48, 48);
+
+            // 角丸長方形のパスを構築
+            path.AddArc(baseRect.X, baseRect.Y, radius, radius, 180, 90);
+            path.AddArc(baseRect.X + baseRect.Width - radius, baseRect.Y, radius, radius, 270, 90);
+            path.AddArc(baseRect.X + baseRect.Width - radius, baseRect.Y + baseRect.Height - radius, radius, radius, 0, 90);
+            path.AddArc(baseRect.X, baseRect.Y + baseRect.Height - radius, radius, radius, 90, 90);
+            path.CloseAllFigures();
+
+            // マウス本体の描画（角丸）
+            g.FillPath(Brushes.LightGray, path);
+            g.DrawPath(Pens.DarkGray, path);
+
+            // 左ボタン（角丸）
+            var leftButtonRect = new Rectangle(8, 24, 20, 28);
+            var leftButtonPath = new System.Drawing.Drawing2D.GraphicsPath();
+            leftButtonPath.AddArc(leftButtonRect.X, leftButtonRect.Y, radius, radius, 180, 90);
+            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y, 
+                                 leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height);
+            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height,
+                                 leftButtonRect.X, leftButtonRect.Y + leftButtonRect.Height);
+            leftButtonPath.CloseAllFigures();
+
+            g.FillPath(highlightLeft ? Brushes.DeepPink : Brushes.White, leftButtonPath);
+            g.DrawPath(Pens.DarkGray, leftButtonPath);
+
+            // 右ボタン（角丸）
+            var rightButtonRect = new Rectangle(36, 24, 20, 28);
+            var rightButtonPath = new System.Drawing.Drawing2D.GraphicsPath();
+            rightButtonPath.AddLine(rightButtonRect.X, rightButtonRect.Y, rightButtonRect.X + rightButtonRect.Width - radius, rightButtonRect.Y);
+            rightButtonPath.AddArc(rightButtonRect.X + rightButtonRect.Width - radius, rightButtonRect.Y, radius, radius, 270, 90);
+            rightButtonPath.AddLine(rightButtonRect.X + rightButtonRect.Width, rightButtonRect.Y + radius, rightButtonRect.X + rightButtonRect.Width, rightButtonRect.Y + rightButtonRect.Height);
+            rightButtonPath.AddLine(rightButtonRect.X + rightButtonRect.Width, rightButtonRect.Y + rightButtonRect.Height, rightButtonRect.X, rightButtonRect.Y + rightButtonRect.Height);
+            rightButtonPath.CloseAllFigures();
+
+            g.FillPath(highlightRight ? Brushes.DeepPink : Brushes.White, rightButtonPath);
+            g.DrawPath(Pens.DarkGray, rightButtonPath);
+
+            // ホイール
+            var wheelBrush = highlightWheel ? Brushes.DeepPink : 
+                            scrollUp ? Brushes.Orange :
+                            scrollDown ? Brushes.Cyan : 
+                            Brushes.White;
+
+            g.FillEllipse(wheelBrush, 24, 30, 16, 10);
+            g.DrawEllipse(Pens.DarkGray, 24, 30, 16, 10);
+
+            // スクロール方向を示す矢印
+            if (scrollUp)
+            {
+                g.DrawString("⏫", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Orange, 20, 26);
+            }
+            else if (scrollDown)
+            {
+                g.DrawString("⏬", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Cyan, 20, 26);
+            }
+        }
+        return bmp;
+    }
+
+    private Bitmap OLDCreateClickIcon(bool highlightLeft = false, bool highlightRight = false, bool highlightWheel = false, bool scrollUp = false, bool scrollDown = false)
+    {
+        var bmp = new Bitmap(64, 96);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            // マウス本体の描画
+            g.FillRectangle(Brushes.LightGray, 8, 24, 48, 48);
+            g.DrawRectangle(Pens.DarkGray, 8, 24, 48, 48);
+
+            // 左ボタン
+            g.FillRectangle(highlightLeft ? Brushes.DeepPink : Brushes.White, 8, 24, 20, 21);
+            g.DrawRectangle(Pens.DarkGray, 8, 24, 20, 21);
+
+            // 右ボタン
+            g.FillRectangle(highlightRight ? Brushes.DeepPink : Brushes.White, 36, 24, 20, 21);
+            g.DrawRectangle(Pens.DarkGray, 36, 24, 20, 21);
+
+            // ホイール
+            var wheelBrush = highlightWheel ? Brushes.DeepPink : 
+                            scrollUp ? Brushes.Orange :
+                            scrollDown ? Brushes.Cyan : 
+                            Brushes.White;
+
+            g.FillEllipse(wheelBrush, 26, 24, 12, 20);
+            g.DrawEllipse(Pens.DarkGray, 26, 24, 12, 20);
+
+            // スクロール方向を示す矢印
+            if (scrollUp)
+            {
+                g.DrawString("⏫", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Orange, 20, 26);
+            }
+            else if (scrollDown)
+            {
+                g.DrawString("⏬", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Cyan, 20, 26);
+            }
+        }
+        return bmp;
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
-
-        if (_isAnimating && _currentOpacity > 0)
+        lock (_lockObj)
         {
-            // 現在の透明度を設定
-            _mouseBrush.Color = Color.FromArgb((int)(_currentOpacity * 255), 255, 0, 0);
-            _mousePen.Color = Color.FromArgb((int)(_currentOpacity * 255), 200, 0, 0);
-
-            // マウス形状を図形で描画
-            DrawMouseIcon(e.Graphics, _lastClickPosition);
+            foreach (var icon in _activeIcons)
+            {
+                e.Graphics.DrawImage(icon.Icon, icon.Location);
+            }
         }
     }
 
-    private void DrawMouseIcon(Graphics g, Point position)
+    protected override void OnFormClosed(FormClosedEventArgs e)
     {
-        // マウスの本体（円）
-        g.FillEllipse(_mouseBrush, position.X - 15, position.Y - 15, 30, 30);
-        g.DrawEllipse(_mousePen, position.X - 15, position.Y - 15, 30, 30);
-
-        // マウスのボタン（2つの円弧）
-        g.DrawArc(_mousePen, position.X - 10, position.Y - 10, 20, 20, 30, 120);
-        g.DrawArc(_mousePen, position.X - 10, position.Y - 10, 20, 20, 210, 120);
-
-        // マウスの矢印（線）
-        Point[] arrowPoints = {
-            new Point(position.X + 20, position.Y + 20),
-            new Point(position.X + 30, position.Y + 30),
-            new Point(position.X + 25, position.Y + 25),
-            new Point(position.X + 30, position.Y + 20),
-            new Point(position.X + 20, position.Y + 30)
-        };
-        g.DrawLines(_mousePen, arrowPoints);
+        UnhookWindowsHookEx(_hookID);
+        base.OnFormClosed(e);
     }
 
-    private async void AnimationTick(object sender, EventArgs e)
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
-        if (!_isAnimating) return;
-
-        // フェードイン (0 → 1)
-        if (_currentOpacity < 1f)
+        if (keyData == Keys.Escape)
         {
-            _currentOpacity += 0.1f;
-            if (_currentOpacity > 1f) _currentOpacity = 1f;
-            this.Invalidate();
-            return;
+            this.Close();
+            return true;
         }
-
-        // 2秒間表示
-        await Task.Delay(2000);
-
-        // フェードアウト (1 → 0)
-        while (_currentOpacity > 0f)
-        {
-            _currentOpacity -= 0.05f;
-            if (_currentOpacity < 0f) _currentOpacity = 0f;
-            this.Invalidate();
-            await Task.Delay(16);
-        }
-
-        // アニメーション終了
-        _isAnimating = false;
-        _animationTimer.Stop();
-    }
-
-    private void StartAnimation(Point position)
-    {
-        _lastClickPosition = position;
-        _currentOpacity = 0f;
-        _isAnimating = true;
-        _animationTimer.Start();
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         if (nCode >= 0)
         {
+            MSLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
+            Point clickPos = new Point(hookStruct.pt.x, hookStruct.pt.y);
+            Bitmap icon = null;
+
             if (wParam == (IntPtr)WM_LBUTTONDOWN)
             {
-                MSLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-                Point clickPos = new Point(hookStruct.pt.x, hookStruct.pt.y);
-                
-                // UIスレッドでアニメーションを開始
-                this.BeginInvoke((MethodInvoker)delegate {
-                    StartAnimation(clickPos);
-                });
+                icon = CreateClickIcon(highlightLeft: true);
+            }
+            else if (wParam == (IntPtr)WM_RBUTTONDOWN)
+            {
+                icon = CreateClickIcon(highlightRight: true);
+            }
+            else if (wParam == (IntPtr)WM_MBUTTONDOWN)
+            {
+                icon = CreateClickIcon(highlightWheel: true);
+            }
+            else if (wParam == (IntPtr)WM_MOUSEWHEEL)
+            {
+                int delta = (short)((hookStruct.mouseData >> 16) & 0xFFFF);
+                icon = CreateClickIcon(scrollUp: delta > 0, scrollDown: delta < 0);
+            }
+
+            if (icon != null)
+            {
+                // カーソルの右下に表示
+                var displayPos = new Point(clickPos.X + 10, clickPos.Y + 10);
+                var newIcon = new ClickIcon(icon, displayPos);
+
+                lock (_lockObj)
+                {
+                    _activeIcons.Add(newIcon);
+                }
+
+                // 0.5秒後にアイコンを消す
+                Task.Delay(800).ContinueWith(t => 
+                {
+                    lock (_lockObj)
+                    {
+                        _activeIcons.Remove(newIcon);
+                    }
+                    this.Invalidate();
+                }, TaskScheduler.FromCurrentSynchronizationContext());
             }
         }
         return CallNextHookEx(_hookID, nCode, wParam, lParam);
+    }
+
+    private class ClickIcon
+    {
+        public Bitmap Icon { get; set;}
+        public Point Location { get; set;}
+
+        public ClickIcon(Bitmap icon, Point location)
+        {
+            Icon = icon;
+            Location = location;
+        }
     }
 
     // マウスフックの設定
@@ -159,17 +264,6 @@ public class TransparentOverlay : Form
         SetWindowLong(handle, GWL_EXSTYLE, extendedStyle | WS_EX_LAYERED | WS_EX_TRANSPARENT);
     }
 
-    protected override void OnFormClosed(FormClosedEventArgs e)
-    {
-        _animationTimer.Stop();
-        _animationTimer.Dispose();
-        UnhookWindowsHookEx(_hookID);
-        _mouseBrush.Dispose();
-        _mousePen.Dispose();
-        base.OnFormClosed(e);
-    }
-
-    // その他の定義 (構造体、定数、DLLインポート) は元のコードと同じ
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int x; public int y; }
 
@@ -177,18 +271,19 @@ public class TransparentOverlay : Form
     private struct MSLLHOOKSTRUCT
     {
         public POINT pt;
-        public uint mouseData;
+        public int mouseData;
         public uint flags;
         public uint time;
         public IntPtr dwExtraInfo;
     }
 
+    private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
     private const int WH_MOUSE_LL = 14;
     private const int WM_LBUTTONDOWN = 0x0201;
     private const int WM_RBUTTONDOWN = 0x0204;
-    private const int WM_MOUSEMOVE = 0x0200;
+    private const int WM_MBUTTONDOWN = 0x0207;
     private const int WM_MOUSEWHEEL = 0x020A;
-    
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_LAYERED = 0x80000;
     private const int WS_EX_TRANSPARENT = 0x20;
@@ -199,24 +294,24 @@ public class TransparentOverlay : Form
     [DllImport("user32.dll")]
     private static extern int GetWindowLong(IntPtr hwnd, int nIndex);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWindowsHookEx(IntPtr hhk);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
     private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-    private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
 
     [STAThread]
     public static void Main()
     {
         Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new TransparentOverlay());
     }
 }
