@@ -42,7 +42,7 @@ public class TransparentOverlay : Form
         _hookID = SetHook(_mouseProc);
 
         // アニメーション用タイマー
-        _animationTimer = new Timer { Interval = 50 }; // 20FPS
+        _animationTimer = new Timer { Interval = 16 };
         _animationTimer.Tick += (s, e) => this.Invalidate();
         _animationTimer.Start();
     }
@@ -130,6 +130,11 @@ public class TransparentOverlay : Form
                             effect.Location.Y - effect.Radius,
                             effect.Radius * 2,
                             effect.Radius * 2);
+                        e.Graphics.DrawEllipse(pen,
+                            effect.Location.X - effect.Radius / 2,
+                            effect.Location.Y - effect.Radius / 2,
+                            effect.Radius,
+                            effect.Radius);
                     }
                 }
                 else if (effect.Type == ClickEffect.typeMouse)
@@ -139,7 +144,7 @@ public class TransparentOverlay : Form
                 }
                 else
                 {
-                    e.Graphics.DrawString(effect.Text, new Font("Yu Gothic UI", 20), Brushes.Cyan, effect.Location.X + 20, effect.Location.Y - 50);
+                    e.Graphics.DrawString(effect.Text, new Font("Yu Gothic UI", 28, FontStyle.Bold), Brushes.Cyan, effect.Location.X + 20, effect.Location.Y - 60);
                 }
             }
         }
@@ -181,7 +186,7 @@ public class TransparentOverlay : Form
 
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
-        if (wParam == (IntPtr)WM_MOUSEMOVE) return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        //if (wParam == (IntPtr)WM_MOUSEMOVE && wParam != (IntPtr)WM_MBUTTONDOWN) return CallNextHookEx(_hookID, nCode, wParam, lParam);
         if (nCode >= 0)
         {
             MSLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
@@ -223,7 +228,7 @@ public class TransparentOverlay : Form
                     _activeEffects.Add(iconEffect);
                 }
 
-                Task.Delay(800).ContinueWith(t => 
+                Task.Delay(600).ContinueWith(t => 
                 {
                     lock (_lockObj)
                     {
@@ -233,6 +238,7 @@ public class TransparentOverlay : Form
                 }, TaskScheduler.FromCurrentSynchronizationContext());
             }
 
+            if (wParam == (IntPtr)WM_MOUSEMOVE) return CallNextHookEx(_hookID, nCode, wParam, lParam);
             var key = "";
             if ((Control.ModifierKeys & Keys.Control) > 0) key += "CONTROL";
             if ((Control.ModifierKeys & Keys.Shift) > 0) key += "\nSHIFT";
@@ -244,7 +250,7 @@ public class TransparentOverlay : Form
                     _activeEffects.Add(keyEffect);
                 }
 
-                Task.Delay(800).ContinueWith(t =>
+                Task.Delay(2400).ContinueWith(t =>
                 {
                     lock(_lockObj)
                     {
