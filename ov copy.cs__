@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using System.Threading.Tasks;
@@ -10,11 +11,12 @@ public class TransparentOverlay : Form
 {
     private LowLevelMouseProc _mouseProc;
     private IntPtr _hookID = IntPtr.Zero;
-    private readonly List<ClickIcon> _activeIcons = new List<ClickIcon>();
+    private readonly List<ClickEffect> _activeIcons = new List<ClickEffect>();
     private readonly object _lockObj = new object();
     private readonly Bitmap _leftClickIcon;
     private readonly Bitmap _rightClickIcon;
     private readonly Bitmap _wheelClickIcon;
+    Timer timer;
 
     public TransparentOverlay()
     {
@@ -41,7 +43,7 @@ public class TransparentOverlay : Form
         _hookID = SetHook(_mouseProc);
 
         // アイコン更新用タイマー
-        var timer = new Timer { Interval = 50 };
+        timer = new Timer { Interval = 50 };
         timer.Tick += (s, e) => this.Invalidate();
         timer.Start();
     }
@@ -74,10 +76,8 @@ public class TransparentOverlay : Form
             var leftButtonRect = new Rectangle(8, 24, 20, 28);
             var leftButtonPath = new System.Drawing.Drawing2D.GraphicsPath();
             leftButtonPath.AddArc(leftButtonRect.X, leftButtonRect.Y, radius, radius, 180, 90);
-            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y, 
-                                 leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height);
-            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height,
-                                 leftButtonRect.X, leftButtonRect.Y + leftButtonRect.Height);
+            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y, leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height);
+            leftButtonPath.AddLine(leftButtonRect.X + leftButtonRect.Width, leftButtonRect.Y + leftButtonRect.Height, leftButtonRect.X, leftButtonRect.Y + leftButtonRect.Height);
             leftButtonPath.CloseAllFigures();
 
             g.FillPath(highlightLeft ? Brushes.DeepPink : Brushes.White, leftButtonPath);
@@ -117,45 +117,6 @@ public class TransparentOverlay : Form
         return bmp;
     }
 
-    private Bitmap OLDCreateClickIcon(bool highlightLeft = false, bool highlightRight = false, bool highlightWheel = false, bool scrollUp = false, bool scrollDown = false)
-    {
-        var bmp = new Bitmap(64, 96);
-        using (var g = Graphics.FromImage(bmp))
-        {
-            // マウス本体の描画
-            g.FillRectangle(Brushes.LightGray, 8, 24, 48, 48);
-            g.DrawRectangle(Pens.DarkGray, 8, 24, 48, 48);
-
-            // 左ボタン
-            g.FillRectangle(highlightLeft ? Brushes.DeepPink : Brushes.White, 8, 24, 20, 21);
-            g.DrawRectangle(Pens.DarkGray, 8, 24, 20, 21);
-
-            // 右ボタン
-            g.FillRectangle(highlightRight ? Brushes.DeepPink : Brushes.White, 36, 24, 20, 21);
-            g.DrawRectangle(Pens.DarkGray, 36, 24, 20, 21);
-
-            // ホイール
-            var wheelBrush = highlightWheel ? Brushes.DeepPink : 
-                            scrollUp ? Brushes.Orange :
-                            scrollDown ? Brushes.Cyan : 
-                            Brushes.White;
-
-            g.FillEllipse(wheelBrush, 26, 24, 12, 20);
-            g.DrawEllipse(Pens.DarkGray, 26, 24, 12, 20);
-
-            // スクロール方向を示す矢印
-            if (scrollUp)
-            {
-                g.DrawString("⏫", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Orange, 20, 26);
-            }
-            else if (scrollDown)
-            {
-                g.DrawString("⏬", new Font("Yu Gothic UI", 30, FontStyle.Bold), Brushes.Cyan, 20, 26);
-            }
-        }
-        return bmp;
-    }
-
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -163,13 +124,29 @@ public class TransparentOverlay : Form
         {
             foreach (var icon in _activeIcons)
             {
-                e.Graphics.DrawImage(icon.Icon, icon.Location);
+                if (icon.IsCircle)
+                {
+                    using (var pen = new Pen(Color.FromArgb(150, 0, 120, 255), 3))
+                    {
+                        e.Graphics.DrawEllipse(pen,
+                            icon.Location.X - icon.Radius,
+                            icon.Location.Y - icon.Radius,
+                            icon.Radius * 2,
+                            icon.Radius * 2);
+                    }
+                }
+                else
+                {
+                    e.Graphics.DrawImage(icon.Icon, icon.Location);
+                }
             }
         }
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        timer.Stop();
+        timer.Dispose();
         UnhookWindowsHookEx(_hookID);
         base.OnFormClosed(e);
     }
@@ -190,6 +167,21 @@ public class TransparentOverlay : Form
         {
             MSLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
             Point clickPos = new Point(hookStruct.pt.x, hookStruct.pt.y);
+
+            var circleEffect = new ClickEffect(clickPos, DateTime.Now.AddMilliseconds(100));
+            lock(_lockObj)
+            {
+                _activeIcons.Add(circleEffect);
+            }
+            Task.Delay(100).ContinueWith(t =>
+            {
+                lock (_lockObj)
+                {
+                    _activeIcons.Remove(circleEffect);
+                }
+                this.Invalidate();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+
             Bitmap icon = null;
 
             if (wParam == (IntPtr)WM_LBUTTONDOWN)
@@ -235,15 +227,28 @@ public class TransparentOverlay : Form
         return CallNextHookEx(_hookID, nCode, wParam, lParam);
     }
 
-    private class ClickIcon
+    private class ClickEffect
     {
+        public DateTime ExpiryTime { get; set; }
         public Bitmap Icon { get; set;}
         public Point Location { get; set;}
+        public bool IsCircle { get; set;}
+        public int Radius { get; set;}
 
-        public ClickIcon(Bitmap icon, Point location)
+        public ClickEffect(Bitmap icon, Point location)
         {
             Icon = icon;
             Location = location;
+            ExpiryTime = ExpiryTime;
+            IsCircle = false;
+        }
+
+        public ClickEffect(POINT location, DateTime expiryTime)
+        {
+            Location = location;
+            ExpiryTime = expiryTime;
+            Radius = 5;
+            IsCircle = true;
         }
     }
 
