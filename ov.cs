@@ -123,7 +123,7 @@ public class TransparentOverlay : Form
                 if (effect.Type == ClickEffect.typeCircle)
                 {
                     // 輪の描画（半透明の青い円）
-                    using (var pen = new Pen(Color.FromArgb(150, 0, 120, 255), 3))
+                    using (var pen = new Pen(Color.FromArgb(250, 0, 120, 255), 3))
                     {
                         e.Graphics.DrawEllipse(pen, 
                             effect.Location.X - effect.Radius,
@@ -169,10 +169,10 @@ public class TransparentOverlay : Form
             Type = typeMouse;
         }
         
-        public ClickEffect(Point location)
+        public ClickEffect(int radius, Point location)
         {
             Location = location;
-            Radius = 16;
+            Radius = radius;
             Type = typeCircle;
         }
 
@@ -187,13 +187,15 @@ public class TransparentOverlay : Form
     private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
         //if (wParam == (IntPtr)WM_MOUSEMOVE && wParam != (IntPtr)WM_MBUTTONDOWN) return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        if (wParam == (IntPtr)WM_MOUSEMOVE) return CallNextHookEx(_hookID, nCode, wParam, lParam);
         if (nCode >= 0)
         {
             MSLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
             Point clickPos = new Point(hookStruct.pt.x, hookStruct.pt.y);
 
             // 輪の表示 (すべてのクリックタイプで表示)
-            var circleEffect = new ClickEffect(clickPos);
+            var circleEffect = new ClickEffect(30, clickPos);
+            
             lock (_lockObj)
             {
                 _activeEffects.Add(circleEffect);
@@ -238,7 +240,6 @@ public class TransparentOverlay : Form
                 }, TaskScheduler.FromCurrentSynchronizationContext());
             }
 
-            if (wParam == (IntPtr)WM_MOUSEMOVE) return CallNextHookEx(_hookID, nCode, wParam, lParam);
             var key = "";
             if ((Control.ModifierKeys & Keys.Control) > 0) key += "CONTROL";
             if ((Control.ModifierKeys & Keys.Shift) > 0) key += "\nSHIFT";
